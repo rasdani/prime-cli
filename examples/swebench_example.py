@@ -156,14 +156,13 @@ def run_instance(
             CreateSandboxRequest(
                 name=f"swebench-{instance_id}",
                 docker_image=test_spec.instance_image_key,
-                # start_command=test_spec.eval_script,
                 start_command="tail -f /dev/null",
                 cpu_cores=1,
                 memory_gb=2,
                 timeout_minutes=120,  # 2 hours to avoid timeout during demo
             )
         )
-        sandbox_client.wait_for_sandbox(sandbox.id)
+        sandbox_client.wait_for_sandbox(sandbox.id, max_attempts=60)
         logger.info(f"Sandbox for {instance_id} started: {sandbox.id}")
 
         # Copy model prediction as patch file to container
@@ -172,13 +171,6 @@ def run_instance(
         logger.info(
             f"Intermediate patch for {instance_id} written to {patch_file}, now applying to container..."
         )
-        # pipe eval script into sandbox
-        pipe_file_content_into_sandbox(
-            sandbox_client=sandbox_client,
-            sandbox_id=sandbox.id,
-            file_path=PurePosixPath("/eval.sh"),
-            content=test_spec.eval_script
-        )
         # pipe predicted patch into sandbox
         pipe_file_content_into_sandbox(
             sandbox_client=sandbox_client,
@@ -186,34 +178,27 @@ def run_instance(
             file_path=DOCKER_PATCH,
             content=patch_file.read_text(),
         )
-        # print eval script content
-        cmd_response = sandbox_client.execute_command(sandbox.id, f"cat /eval.sh")
-        logger.info(f"Eval script content: {cmd_response.stdout}")
-        # print patch content
-        cmd_response = sandbox_client.execute_command(sandbox.id, f"cat {DOCKER_PATCH}")
-        logger.info(f"Patch content: {cmd_response.stdout}")
-        breakpoint()
 
         # Attempt to apply patch to container (TODO: FIX THIS)
+        # breakpoint()
         applied_patch = False
         for git_apply_cmd in GIT_APPLY_CMDS:
-            val = sandbox_client.execute_command(
+            cmd_response = sandbox_client.execute_command(
                 sandbox.id,
                 f"{git_apply_cmd} {DOCKER_PATCH}",
-                workdir=DOCKER_WORKDIR,
-                user=DOCKER_USER,
+                working_dir=DOCKER_WORKDIR,
             )
-            if val.exit_code == 0:
-                logger.info(f"{APPLY_PATCH_PASS}:\n{val.output.decode(UTF8)}")
+            if cmd_response.exit_code == 0:
+                logger.info(f"{APPLY_PATCH_PASS}:\n{cmd_response.stdout}")
                 applied_patch = True
                 break
             else:
-                logger.info(f"Failed to apply patch to container: {git_apply_cmd}")
+                logger.info(f"Failed to apply patch to container: {git_apply_cmd}\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}")
         if not applied_patch:
-            logger.info(f"{APPLY_PATCH_FAIL}:\n{val.output.decode(UTF8)}")
+            logger.info(f"{APPLY_PATCH_FAIL}:\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}")
             raise EvaluationError(
                 instance_id,
-                f"{APPLY_PATCH_FAIL}:\n{val.output.decode(UTF8)}",
+                f"{APPLY_PATCH_FAIL}:\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}",
                 logger,
             )
 
@@ -221,10 +206,10 @@ def run_instance(
         git_diff_output_before = (
             sandbox_client.execute_command(
                 sandbox.id,
-                "git -c core.fileMode=false diff", workdir=DOCKER_WORKDIR
+                "git -c core.fileMode=false diff",
+                working_dir=DOCKER_WORKDIR,
             )
-            .output.decode(UTF8)
-            .strip()
+            .stdout
         )
         logger.info(f"Git diff before:\n{git_diff_output_before}")
 
@@ -233,32 +218,34 @@ def run_instance(
         logger.info(
             f"Eval script for {instance_id} written to {eval_file}; copying to container..."
         )
-        copy_to_container(container, eval_file, PurePosixPath("/eval.sh"))
+        # pipe eval script into sandbox
+        pipe_file_content_into_sandbox(
+            sandbox_client=sandbox_client,
+            sandbox_id=sandbox.id,
+            file_path=PurePosixPath("/eval.sh"),
+            content=eval_file.read_text(),
+        )
 
         # Run eval script, write output to logs
-        test_output, timed_out, total_runtime = exec_run_with_timeout(
-            container, "/bin/bash /eval.sh", timeout
+        cmd_response = sandbox_client.execute_command(
+            sandbox_id=sandbox.id,
+            command="/bin/bash /eval.sh",
+            working_dir=DOCKER_WORKDIR,
         )
         test_output_path = log_dir / LOG_TEST_OUTPUT
-        logger.info(f"Test runtime: {total_runtime:_.2f} seconds")
+        test_output = cmd_response.stdout
         with open(test_output_path, "w") as f:
             f.write(test_output)
             logger.info(f"Test output for {instance_id} written to {test_output_path}")
-            if timed_out:
-                f.write(f"\n\nTimeout error: {timeout} seconds exceeded.")
-                raise EvaluationError(
-                    instance_id,
-                    f"Test timed out after {timeout} seconds.",
-                    logger,
-                )
 
         # Get git diff after running eval script (ignore permission changes)
         git_diff_output_after = (
-            container.exec_run(
-                "git -c core.fileMode=false diff", workdir=DOCKER_WORKDIR
+            sandbox_client.execute_command(
+                sandbox_id=sandbox.id,
+                command="git -c core.fileMode=false diff",
+                working_dir=DOCKER_WORKDIR,
             )
-            .output.decode(UTF8)
-            .strip()
+            .stdout
         )
 
         # Check if git diff changed after running eval script

@@ -362,9 +362,8 @@ class SandboxClient:
         )
         return CommandResponse(**response)
 
-    def wait_for_sandbox(self, sandbox_id: str):
+    def wait_for_sandbox(self, sandbox_id: str, max_attempts: int = 30):
         print("\nWaiting for sandbox to be running...")
-        max_attempts = 30
         for _ in range(max_attempts):
             sandbox = self.get(sandbox_id)
             if sandbox.status == "RUNNING":
