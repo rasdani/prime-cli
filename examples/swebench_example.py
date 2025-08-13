@@ -4,67 +4,42 @@ adapted from https://github.com/SWE-bench/SWE-bench/blob/main/swebench/harness/r
 """
 from __future__ import annotations
 
-import docker
 import json
-import platform
 import traceback
-
-if platform.system() == "Linux":
-    import resource
-
-from argparse import ArgumentParser, ArgumentDefaultsHelpFormatter
+from argparse import ArgumentDefaultsHelpFormatter, ArgumentParser
 from pathlib import Path, PurePosixPath
 
+from prime_cli.api.client import APIClient, APIError
+from prime_cli.api.sandbox import CommandResponse, CreateSandboxRequest, SandboxClient
 from swebench.harness.constants import (
     APPLY_PATCH_FAIL,
     APPLY_PATCH_PASS,
     DOCKER_PATCH,
-    DOCKER_USER,
     DOCKER_WORKDIR,
     INSTANCE_IMAGE_BUILD_DIR,
     KEY_INSTANCE_ID,
     KEY_MODEL,
     KEY_PREDICTION,
-    LOG_REPORT,
     LOG_INSTANCE,
+    LOG_REPORT,
     LOG_TEST_OUTPUT,
     RUN_EVALUATION_LOG_DIR,
-    UTF8,
-)
-from swebench.harness.docker_utils import (
-    clean_images,
-    cleanup_container,
-    copy_to_container,
-    exec_run_with_timeout,
-    list_images,
-    remove_image,
-    should_remove,
 )
 from swebench.harness.docker_build import (
     BuildImageError,
-    build_container,
-    build_env_images,
     close_logger,
     setup_logger,
 )
 from swebench.harness.grading import get_eval_report
 from swebench.harness.reporting import make_run_report
-from swebench.harness.modal_eval import (
-    run_instances_modal,
-    validate_modal_credentials,
-)
-from swebench.harness.test_spec.test_spec import make_test_spec, TestSpec
+from swebench.harness.test_spec.test_spec import TestSpec, make_test_spec
 from swebench.harness.utils import (
     EvaluationError,
-    load_swebench_dataset,
     get_predictions_from_file,
-    run_threadpool,
-    str2bool,
+    load_swebench_dataset,
     optional_str,
+    str2bool,
 )
-
-from prime_cli.api.client import APIClient, APIError
-from prime_cli.api.sandbox import CommandResponse, CreateSandboxRequest, SandboxClient
 
 GIT_APPLY_CMDS = [
     # "git apply --verbose",
@@ -76,16 +51,12 @@ GIT_APPLY_CMDS = [
 
 
 def pipe_file_content_into_sandbox(
-    sandbox_client: SandboxClient,
-    sandbox_id: str,
-    file_path: str,
-    content: str
+    sandbox_client: SandboxClient, sandbox_id: str, file_path: str, content: str
 ) -> CommandResponse:
     # Use cat with heredoc to avoid quote issues
-    escaped_content = content.replace('\\', '\\\\').replace('$', '\\$').replace('`', '\\`')
+    escaped_content = content.replace("\\", "\\\\").replace("$", "\\$").replace("`", "\\`")
     return sandbox_client.execute_command(
-        sandbox_id, 
-        f"cat > {file_path} << 'EOF'\n{escaped_content}\nEOF"
+        sandbox_id, f"cat > {file_path} << 'EOF'\n{escaped_content}\nEOF"
     )
 
 
@@ -131,16 +102,12 @@ def run_instance(
 
     if not test_spec.is_remote_image:
         # Link the image build dir in the log dir
-        build_dir = INSTANCE_IMAGE_BUILD_DIR / test_spec.instance_image_key.replace(
-            ":", "__"
-        )
+        build_dir = INSTANCE_IMAGE_BUILD_DIR / test_spec.instance_image_key.replace(":", "__")
         image_build_link = log_dir / "image_build_dir"
         if not image_build_link.exists():
             try:
                 # link the image build dir in the log dir
-                image_build_link.symlink_to(
-                    build_dir.absolute(), target_is_directory=True
-                )
+                image_build_link.symlink_to(build_dir.absolute(), target_is_directory=True)
             except:
                 # some error, idk why
                 pass
@@ -172,7 +139,6 @@ def run_instance(
             "git config --global --add safe.directory /testbed",
             # working_dir=DOCKER_WORKDIR,
         )
-        logger.info(f"git config --global --add safe.directory /testbed: stdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}")
 
         # Copy model prediction as patch file to container
         patch_file = Path(log_dir / "patch.diff")
@@ -189,7 +155,9 @@ def run_instance(
             file_path=DOCKER_PATCH,
             content=patch_file.read_text(),
         )
-        logger.info(f"pipe_file_content_into_sandbox:\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}")
+        logger.info(
+            f"pipe_file_content_into_sandbox:\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}"
+        )
 
         # Attempt to apply patch to container (TODO: FIX THIS)
         applied_patch = False
@@ -204,9 +172,13 @@ def run_instance(
                 applied_patch = True
                 break
             else:
-                logger.info(f"Failed to apply patch to container: {git_apply_cmd}\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}")
+                logger.info(
+                    f"Failed to apply patch to container: {git_apply_cmd}\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}"
+                )
         if not applied_patch:
-            logger.info(f"{APPLY_PATCH_FAIL}:\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}")
+            logger.info(
+                f"{APPLY_PATCH_FAIL}:\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}"
+            )
             raise EvaluationError(
                 instance_id,
                 f"{APPLY_PATCH_FAIL}:\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}",
@@ -214,16 +186,13 @@ def run_instance(
             )
 
         # Get git diff before running eval script
-        cmd_response = (
-            sandbox_client.execute_command(
-                sandbox.id,
-                "git -C /testbed -c core.fileMode=false diff",  # TODO: fix working_dir/mount issue
-                # working_dir=DOCKER_WORKDIR,
-            )
+        cmd_response = sandbox_client.execute_command(
+            sandbox.id,
+            "git -C /testbed -c core.fileMode=false diff",  # TODO: fix working_dir/mount issue in sandboxes
+            # working_dir=DOCKER_WORKDIR,
         )
         git_diff_output_before = cmd_response.stdout
         logger.info(f"Git diff before:\n{git_diff_output_before}")
-        logger.info(f"\nstderr: {cmd_response.stderr}")
 
         eval_file = Path(log_dir / "eval.sh")
         eval_file.write_text(test_spec.eval_script)
@@ -239,7 +208,9 @@ def run_instance(
             file_path=PurePosixPath("/tmp/eval.sh"),
             content=eval_file.read_text(),
         )
-        logger.info(f"pipe_file_content_into_sandbox: stdout: \n{cmd_response.stdout}\nstderr: \n{cmd_response.stderr}")
+        logger.info(
+            f"pipe_file_content_into_sandbox: stdout: \n{cmd_response.stdout}\nstderr: \n{cmd_response.stderr}"
+        )
 
         ls_response = sandbox_client.execute_command(
             sandbox_id=sandbox.id,
@@ -262,18 +233,15 @@ def run_instance(
             logger.info(f"Test output for {instance_id} written to {test_output_path}")
 
         # Get git diff after running eval script (ignore permission changes)
-        cmd_response = (
-            sandbox_client.execute_command(
-                sandbox_id=sandbox.id,
-                command="git -c core.fileMode=false diff",
-                working_dir=DOCKER_WORKDIR,
-            )
+        cmd_response = sandbox_client.execute_command(
+            sandbox_id=sandbox.id,
+            command="git -c core.fileMode=false diff",
+            working_dir=DOCKER_WORKDIR,
         )
         git_diff_output_after = cmd_response.stdout
 
         # Check if git diff changed after running eval script
         logger.info(f"Git diff after:\n{git_diff_output_after}")
-        logger.info(f"\nstderr: {cmd_response.stderr}")
         if git_diff_output_after != git_diff_output_before:
             logger.info("Git diff changed after running eval script")
 
@@ -391,9 +359,7 @@ def get_dataset_from_preds(
         # check that all instance IDs have predictions
         missing_preds = set(instance_ids) - set(predictions.keys())
         if missing_preds:
-            print(
-                f"Warning: Missing predictions for {len(missing_preds)} instance IDs."
-            )
+            print(f"Warning: Missing predictions for {len(missing_preds)} instance IDs.")
 
     # check that all prediction IDs are in the dataset
     prediction_ids = set(predictions.keys())
@@ -426,8 +392,7 @@ def get_dataset_from_preds(
         dataset = [
             i
             for i in dataset
-            if i[KEY_INSTANCE_ID] in prediction_ids
-            and i[KEY_INSTANCE_ID] in test_output_ids
+            if i[KEY_INSTANCE_ID] in prediction_ids and i[KEY_INSTANCE_ID] in test_output_ids
         ]
         return dataset
 
@@ -454,17 +419,14 @@ def get_dataset_from_preds(
         dataset = [i for i in dataset if i[KEY_INSTANCE_ID] not in completed_ids]
 
     empty_patch_ids = {
-        k
-        for k, v in predictions.items()
-        if v[KEY_PREDICTION] == "" or v[KEY_PREDICTION] is None
+        k for k, v in predictions.items() if v[KEY_PREDICTION] == "" or v[KEY_PREDICTION] is None
     }
 
     # filter dataset to only instances with predictions
     dataset = [
         i
         for i in dataset
-        if i[KEY_INSTANCE_ID] in prediction_ids
-        and i[KEY_INSTANCE_ID] not in empty_patch_ids
+        if i[KEY_INSTANCE_ID] in prediction_ids and i[KEY_INSTANCE_ID] not in empty_patch_ids
     ]
     return dataset
 
@@ -499,7 +461,6 @@ def main(
     )
     full_dataset = load_swebench_dataset(dataset_name, split, instance_ids)
 
-
     if not dataset:
         print("No instances to run.")
     else:
@@ -529,9 +490,7 @@ if __name__ == "__main__":
         type=str,
         help="Name of dataset or path to JSON file.",
     )
-    parser.add_argument(
-        "--split", type=str, default="test", help="Split of the dataset"
-    )
+    parser.add_argument("--split", type=str, default="test", help="Split of the dataset")
     parser.add_argument(
         "--instance_ids",
         nargs="+",
@@ -546,9 +505,7 @@ if __name__ == "__main__":
     )
 
     # Local execution args
-    parser.add_argument(
-        "--run_id", type=str, required=True, help="Run ID - identifies the run"
-    )
+    parser.add_argument("--run_id", type=str, required=True, help="Run ID - identifies the run")
     parser.add_argument(
         "--namespace",
         type=optional_str,
@@ -564,9 +521,7 @@ if __name__ == "__main__":
         default=False,
         help="Doesn't run new instances, only writes reports for instances with existing test outputs",
     )
-    parser.add_argument(
-        "--report_dir", type=str, default=".", help="Directory to write reports to"
-    )
+    parser.add_argument("--report_dir", type=str, default=".", help="Directory to write reports to")
 
     args = parser.parse_args()
     main(**vars(args))
