@@ -18,11 +18,14 @@ class SandboxStatus(str, Enum):
     ERROR = "ERROR"
     TERMINATED = "TERMINATED"
 
+
 class SandboxNotRunningError(RuntimeError):
     """Raised when an operation requires a RUNNING sandbox but it is not running."""
+
     def __init__(self, sandbox_id: str, status: Optional[str] = None):
         msg = f"Sandbox {sandbox_id} is not running" + (f" (status={status})" if status else ".")
         super().__init__(msg)
+
 
 class Sandbox(BaseModel):
     """Sandbox model"""
@@ -200,6 +203,7 @@ class SandboxClient:
                 return False
             time.sleep(2)
         return True
+
 
 class Sandbox(BaseModel):
     """Sandbox model"""

@@ -132,7 +132,7 @@ def run_instance(
                 # working_dir=DOCKER_WORKDIR,
             )
         )
-        sandbox_client.wait_for_sandbox(sandbox.id, max_attempts=60)
+        sandbox_client.wait_for_sandbox(sandbox.id, max_attempts=120)
         logger.info(f"Sandbox for {instance_id} started: {sandbox.id}")
         cmd_response = sandbox_client.execute_command(
             sandbox.id,
@@ -205,24 +205,24 @@ def run_instance(
         cmd_response = pipe_file_content_into_sandbox(
             sandbox_client=sandbox_client,
             sandbox_id=sandbox.id,
-            file_path=PurePosixPath("/tmp/eval.sh"),
+            file_path=PurePosixPath("/testbed/eval.sh"),
             content=eval_file.read_text(),
         )
         logger.info(
             f"pipe_file_content_into_sandbox: stdout: \n{cmd_response.stdout}\nstderr: \n{cmd_response.stderr}"
         )
 
-        ls_response = sandbox_client.execute_command(
-            sandbox_id=sandbox.id,
-            command="ls -lah /tmp",
+        # ls_response = sandbox_client.execute_command(
+        #     sandbox_id=sandbox.id,
+        #     command="ls -lah /tmp",
             # working_dir=DOCKER_WORKDIR,
-        )
-        logger.info(f"ls -lah: stdout: \n{ls_response.stdout}\nstderr: \n{ls_response.stderr}")
+        # )
+        # logger.info(f"ls -lah: stdout: \n{ls_response.stdout}\nstderr: \n{ls_response.stderr}")
 
         # Run eval script, write output to logs
         cmd_response = sandbox_client.execute_command(
             sandbox_id=sandbox.id,
-            command="/bin/bash /tmp/eval.sh",
+            command="/bin/bash /testbed/eval.sh",
             # working_dir=DOCKER_WORKDIR,
         )
         test_output_path = log_dir / LOG_TEST_OUTPUT
@@ -467,7 +467,7 @@ def main(
         # run instances
         run_instances(
             predictions=predictions,
-            dataset=dataset,
+            instances=dataset,
             run_id=run_id,
             namespace=namespace,
             instance_image_tag=instance_image_tag,
