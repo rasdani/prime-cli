@@ -67,8 +67,10 @@ from prime_cli.api.client import APIClient, APIError
 from prime_cli.api.sandbox import CommandResponse, CreateSandboxRequest, SandboxClient
 
 GIT_APPLY_CMDS = [
-    "git apply --verbose",
-    "git apply --verbose --reject",
+    # "git apply --verbose",
+    # "git apply --verbose --reject",
+    "git -C /testbed apply --verbose",
+    "git -C /testbed apply --verbose --reject",
     "patch --batch --fuzz=5 -p1 -i",
 ]
 
@@ -79,7 +81,12 @@ def pipe_file_content_into_sandbox(
     file_path: str,
     content: str
 ) -> CommandResponse:
-    return sandbox_client.execute_command(sandbox_id, f"echo '{content}' > {file_path}")
+    # Use cat with heredoc to avoid quote issues
+    escaped_content = content.replace('\\', '\\\\').replace('$', '\\$').replace('`', '\\`')
+    return sandbox_client.execute_command(
+        sandbox_id, 
+        f"cat > {file_path} << 'EOF'\n{escaped_content}\nEOF"
+    )
 
 
 def run_instance(
@@ -171,43 +178,6 @@ def run_instance(
             # working_dir=DOCKER_WORKDIR,
         )
         logger.info(f"git config --global --add safe.directory /testbed: stdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}")
-        pwd_response = sandbox_client.execute_command(
-            sandbox.id,
-            "pwd",
-            working_dir=DOCKER_WORKDIR,
-        )
-        logger.info(f"pwd: stdout: {pwd_response.stdout}\nstderr: {pwd_response.stderr}")
-        ls_response = sandbox_client.execute_command(
-            sandbox.id,
-            "ls -lah",
-            working_dir=DOCKER_WORKDIR,
-        )
-        logger.info(f"ls -lah: stdout: {ls_response.stdout}\nstderr: {ls_response.stderr}")
-        ls_response = sandbox_client.execute_command(
-            sandbox.id,
-            "ls -lah .git/",
-            working_dir=DOCKER_WORKDIR,
-        )
-        logger.info(f"ls -lah: stdout: {ls_response.stdout}\nstderr: {ls_response.stderr}")
-        git_status_response = sandbox_client.execute_command(
-            sandbox.id,
-            "git -C /testbed status",
-            # working_dir=DOCKER_WORKDIR,
-        )
-        logger.info(f"git status: stdout: {git_status_response.stdout}\nstderr: {git_status_response.stderr}")
-        git_rev_parse_response = sandbox_client.execute_command(
-            sandbox.id,
-            "git -C /testbed rev-parse --git-dir",
-            # working_dir=DOCKER_WORKDIR,
-        )
-        logger.info(f"git -C /testbed rev-parse --git-dir: stdout: {git_rev_parse_response.stdout}\nstderr: {git_rev_parse_response.stderr}")
-        whoami_response = sandbox_client.execute_command(
-            sandbox.id,
-            "whoami",
-            # working_dir=DOCKER_WORKDIR,
-        )
-        logger.info(f"whoami: stdout: {whoami_response.stdout}\nstderr: {whoami_response.stderr}")
-        # raise Exception("Stop here")
 
         # Copy model prediction as patch file to container
         patch_file = Path(log_dir / "patch.diff")
@@ -215,6 +185,8 @@ def run_instance(
         logger.info(
             f"Intermediate patch for {instance_id} written to {patch_file}, now applying to container..."
         )
+        logger.info(f"patch_file: \n{patch_file.read_text()}")
+
         # pipe predicted patch into sandbox
         cmd_response = pipe_file_content_into_sandbox(
             sandbox_client=sandbox_client,
@@ -225,25 +197,12 @@ def run_instance(
         logger.info(f"pipe_file_content_into_sandbox:\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}")
 
         # Attempt to apply patch to container (TODO: FIX THIS)
-        # breakpoint()
         applied_patch = False
         for git_apply_cmd in GIT_APPLY_CMDS:
-            pwd_response = sandbox_client.execute_command(
-                sandbox.id,
-                "pwd",
-                working_dir=DOCKER_WORKDIR,
-            )
-            logger.info(f"pwd: {pwd_response.stdout}")
-            ls_response = sandbox_client.execute_command(
-                sandbox.id,
-                "ls -lah",
-                working_dir=DOCKER_WORKDIR,
-            )
-            logger.info(f"ls -lah: {ls_response.stdout}")
             cmd_response = sandbox_client.execute_command(
                 sandbox.id,
                 f"{git_apply_cmd} {DOCKER_PATCH}",
-                working_dir=DOCKER_WORKDIR,
+                # working_dir=DOCKER_WORKDIR,
             )
             if cmd_response.exit_code == 0:
                 logger.info(f"{APPLY_PATCH_PASS}:\n{cmd_response.stdout}")
@@ -259,28 +218,12 @@ def run_instance(
                 logger,
             )
 
-        cmd_response = (
-            sandbox_client.execute_command(
-                sandbox.id,
-                "pwd",
-                working_dir=DOCKER_WORKDIR,
-            )
-        )
-        logger.info(f"pwd: {cmd_response.stdout}")
-        cmd_response = (
-            sandbox_client.execute_command(
-                sandbox.id,
-                "ls -lah",
-                working_dir=DOCKER_WORKDIR,
-            )
-        )
-        logger.info(f"ls -lah: {cmd_response.stdout}")
         # Get git diff before running eval script
         cmd_response = (
             sandbox_client.execute_command(
                 sandbox.id,
-                "git -c core.fileMode=false diff",
-                working_dir=DOCKER_WORKDIR,
+                "git -C /testbed -c core.fileMode=false diff",  # TODO: fix working_dir/mount issue
+                # working_dir=DOCKER_WORKDIR,
             )
         )
         git_diff_output_before = cmd_response.stdout
@@ -292,22 +235,33 @@ def run_instance(
         logger.info(
             f"Eval script for {instance_id} written to {eval_file}; copying to container..."
         )
+        logger.info(f"\n{eval_file.read_text()}")
+
         # pipe eval script into sandbox
-        pipe_file_content_into_sandbox(
+        cmd_response = pipe_file_content_into_sandbox(
             sandbox_client=sandbox_client,
             sandbox_id=sandbox.id,
-            file_path=PurePosixPath("/eval.sh"),
+            file_path=PurePosixPath("/tmp/eval.sh"),
             content=eval_file.read_text(),
         )
+        logger.info(f"pipe_file_content_into_sandbox: stdout: \n{cmd_response.stdout}\nstderr: \n{cmd_response.stderr}")
+
+        ls_response = sandbox_client.execute_command(
+            sandbox_id=sandbox.id,
+            command="ls -lah /tmp",
+            # working_dir=DOCKER_WORKDIR,
+        )
+        logger.info(f"ls -lah: stdout: \n{ls_response.stdout}\nstderr: \n{ls_response.stderr}")
 
         # Run eval script, write output to logs
         cmd_response = sandbox_client.execute_command(
             sandbox_id=sandbox.id,
-            command="/bin/bash /eval.sh",
-            working_dir=DOCKER_WORKDIR,
+            command="/bin/bash /tmp/eval.sh",
+            # working_dir=DOCKER_WORKDIR,
         )
         test_output_path = log_dir / LOG_TEST_OUTPUT
         test_output = cmd_response.stdout
+        logger.info(f"test_output: stdout: \n{test_output}\nstderr: \n{cmd_response.stderr}")
         with open(test_output_path, "w") as f:
             f.write(test_output)
             logger.info(f"Test output for {instance_id} written to {test_output_path}")
