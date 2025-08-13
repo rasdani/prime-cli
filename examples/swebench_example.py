@@ -160,10 +160,48 @@ def run_instance(
                 cpu_cores=1,
                 memory_gb=2,
                 timeout_minutes=120,  # 2 hours to avoid timeout during demo
+                # working_dir=DOCKER_WORKDIR,
             )
         )
         sandbox_client.wait_for_sandbox(sandbox.id, max_attempts=60)
         logger.info(f"Sandbox for {instance_id} started: {sandbox.id}")
+        pwd_response = sandbox_client.execute_command(
+            sandbox.id,
+            "pwd",
+            working_dir=DOCKER_WORKDIR,
+        )
+        logger.info(f"pwd: {pwd_response.stdout}")
+        ls_response = sandbox_client.execute_command(
+            sandbox.id,
+            "ls -lah",
+            working_dir=DOCKER_WORKDIR,
+        )
+        logger.info(f"ls -lah: {ls_response.stdout}")
+        ls_response = sandbox_client.execute_command(
+            sandbox.id,
+            "ls -lah .git/",
+            working_dir=DOCKER_WORKDIR,
+        )
+        logger.info(f"ls -lah: {ls_response.stdout}")
+        git_status_response = sandbox_client.execute_command(
+            sandbox.id,
+            "sudo git status",
+            working_dir=DOCKER_WORKDIR,
+        )
+        logger.info(f"git status: {git_status_response.stdout}")
+        git_rev_parse_response = sandbox_client.execute_command(
+            sandbox.id,
+            "sudo git rev-parse --git-dir",
+            working_dir=DOCKER_WORKDIR,
+        )
+        logger.info(f"git rev-parse --git-dir: {git_rev_parse_response.stdout}")
+        whoami_response = sandbox_client.execute_command(
+            sandbox.id,
+            "whoami",
+            working_dir=DOCKER_WORKDIR,
+        )
+        logger.info(f"whoami: {whoami_response.stdout}")
+        raise Exception("Stop here")
 
         # Copy model prediction as patch file to container
         patch_file = Path(log_dir / "patch.diff")
@@ -172,17 +210,30 @@ def run_instance(
             f"Intermediate patch for {instance_id} written to {patch_file}, now applying to container..."
         )
         # pipe predicted patch into sandbox
-        pipe_file_content_into_sandbox(
+        cmd_response = pipe_file_content_into_sandbox(
             sandbox_client=sandbox_client,
             sandbox_id=sandbox.id,
             file_path=DOCKER_PATCH,
             content=patch_file.read_text(),
         )
+        logger.info(f"pipe_file_content_into_sandbox:\nstdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}")
 
         # Attempt to apply patch to container (TODO: FIX THIS)
         # breakpoint()
         applied_patch = False
         for git_apply_cmd in GIT_APPLY_CMDS:
+            pwd_response = sandbox_client.execute_command(
+                sandbox.id,
+                "pwd",
+                working_dir=DOCKER_WORKDIR,
+            )
+            logger.info(f"pwd: {pwd_response.stdout}")
+            ls_response = sandbox_client.execute_command(
+                sandbox.id,
+                "ls -lah",
+                working_dir=DOCKER_WORKDIR,
+            )
+            logger.info(f"ls -lah: {ls_response.stdout}")
             cmd_response = sandbox_client.execute_command(
                 sandbox.id,
                 f"{git_apply_cmd} {DOCKER_PATCH}",
@@ -202,16 +253,33 @@ def run_instance(
                 logger,
             )
 
+        cmd_response = (
+            sandbox_client.execute_command(
+                sandbox.id,
+                "pwd",
+                working_dir=DOCKER_WORKDIR,
+            )
+        )
+        logger.info(f"pwd: {cmd_response.stdout}")
+        cmd_response = (
+            sandbox_client.execute_command(
+                sandbox.id,
+                "ls -lah",
+                working_dir=DOCKER_WORKDIR,
+            )
+        )
+        logger.info(f"ls -lah: {cmd_response.stdout}")
         # Get git diff before running eval script
-        git_diff_output_before = (
+        cmd_response = (
             sandbox_client.execute_command(
                 sandbox.id,
                 "git -c core.fileMode=false diff",
                 working_dir=DOCKER_WORKDIR,
             )
-            .stdout
         )
+        git_diff_output_before = cmd_response.stdout
         logger.info(f"Git diff before:\n{git_diff_output_before}")
+        logger.info(f"\nstderr: {cmd_response.stderr}")
 
         eval_file = Path(log_dir / "eval.sh")
         eval_file.write_text(test_spec.eval_script)
@@ -239,17 +307,18 @@ def run_instance(
             logger.info(f"Test output for {instance_id} written to {test_output_path}")
 
         # Get git diff after running eval script (ignore permission changes)
-        git_diff_output_after = (
+        cmd_response = (
             sandbox_client.execute_command(
                 sandbox_id=sandbox.id,
                 command="git -c core.fileMode=false diff",
                 working_dir=DOCKER_WORKDIR,
             )
-            .stdout
         )
+        git_diff_output_after = cmd_response.stdout
 
         # Check if git diff changed after running eval script
         logger.info(f"Git diff after:\n{git_diff_output_after}")
+        logger.info(f"\nstderr: {cmd_response.stderr}")
         if git_diff_output_after != git_diff_output_before:
             logger.info("Git diff changed after running eval script")
 
@@ -364,7 +433,8 @@ def run_instances(
     # run instances in parallel
     print(f"Running {len(instances)} instances...")
     # run_threadpool(run_instance, payloads, max_workers)
-    run_instance(*payloads[0])
+    # run_instance(*payloads[0])
+    run_instance(*payloads[1])
     print("All instances run.")
 
 
