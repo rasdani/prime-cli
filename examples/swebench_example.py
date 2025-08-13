@@ -165,43 +165,49 @@ def run_instance(
         )
         sandbox_client.wait_for_sandbox(sandbox.id, max_attempts=60)
         logger.info(f"Sandbox for {instance_id} started: {sandbox.id}")
+        cmd_response = sandbox_client.execute_command(
+            sandbox.id,
+            "git config --global --add safe.directory /testbed",
+            # working_dir=DOCKER_WORKDIR,
+        )
+        logger.info(f"git config --global --add safe.directory /testbed: stdout: {cmd_response.stdout}\nstderr: {cmd_response.stderr}")
         pwd_response = sandbox_client.execute_command(
             sandbox.id,
             "pwd",
             working_dir=DOCKER_WORKDIR,
         )
-        logger.info(f"pwd: {pwd_response.stdout}")
+        logger.info(f"pwd: stdout: {pwd_response.stdout}\nstderr: {pwd_response.stderr}")
         ls_response = sandbox_client.execute_command(
             sandbox.id,
             "ls -lah",
             working_dir=DOCKER_WORKDIR,
         )
-        logger.info(f"ls -lah: {ls_response.stdout}")
+        logger.info(f"ls -lah: stdout: {ls_response.stdout}\nstderr: {ls_response.stderr}")
         ls_response = sandbox_client.execute_command(
             sandbox.id,
             "ls -lah .git/",
             working_dir=DOCKER_WORKDIR,
         )
-        logger.info(f"ls -lah: {ls_response.stdout}")
+        logger.info(f"ls -lah: stdout: {ls_response.stdout}\nstderr: {ls_response.stderr}")
         git_status_response = sandbox_client.execute_command(
             sandbox.id,
-            "sudo git status",
-            working_dir=DOCKER_WORKDIR,
+            "git -C /testbed status",
+            # working_dir=DOCKER_WORKDIR,
         )
-        logger.info(f"git status: {git_status_response.stdout}")
+        logger.info(f"git status: stdout: {git_status_response.stdout}\nstderr: {git_status_response.stderr}")
         git_rev_parse_response = sandbox_client.execute_command(
             sandbox.id,
-            "sudo git rev-parse --git-dir",
-            working_dir=DOCKER_WORKDIR,
+            "git -C /testbed rev-parse --git-dir",
+            # working_dir=DOCKER_WORKDIR,
         )
-        logger.info(f"git rev-parse --git-dir: {git_rev_parse_response.stdout}")
+        logger.info(f"git -C /testbed rev-parse --git-dir: stdout: {git_rev_parse_response.stdout}\nstderr: {git_rev_parse_response.stderr}")
         whoami_response = sandbox_client.execute_command(
             sandbox.id,
             "whoami",
-            working_dir=DOCKER_WORKDIR,
+            # working_dir=DOCKER_WORKDIR,
         )
-        logger.info(f"whoami: {whoami_response.stdout}")
-        raise Exception("Stop here")
+        logger.info(f"whoami: stdout: {whoami_response.stdout}\nstderr: {whoami_response.stderr}")
+        # raise Exception("Stop here")
 
         # Copy model prediction as patch file to container
         patch_file = Path(log_dir / "patch.diff")
