@@ -260,7 +260,7 @@ def run_instance(
             # working_dir=DOCKER_WORKDIR,
         )
         test_output_path = log_dir / LOG_TEST_OUTPUT
-        test_output = cmd_response.stdout
+        test_output = cmd_response.stdout + "\n" + cmd_response.stderr
         logger.info(f"test_output: stdout: \n{test_output}\nstderr: \n{cmd_response.stderr}")
         with open(test_output_path, "w") as f:
             f.write(test_output)
